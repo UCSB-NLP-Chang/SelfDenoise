@@ -1,0 +1,203 @@
+# -*- coding: utf-8 -*-
+import torch
+import scipy
+import numpy as np
+from typing import List, Dict
+from abc import ABC, abstractmethod
+from functools import lru_cache
+from overrides import overrides
+from sklearn.metrics import f1_score, classification_report
+
+ABSTAIN_FLAG = -1
+BASE_FOR_CLASSIFICATION = ['loss', 'accuracy', 'f1']
+
+class Metric(ABC):
+    def __init__(self, compare_key='-loss'):
+        compare_key = compare_key.lower()
+        if not compare_key.startswith('-') and compare_key[0].isalnum():
+            compare_key = "+{}".format(compare_key)
+        self.compare_key = compare_key
+
+    def __str__(self):
+        return ', '.join(['{}: {:.4f}'.format(key, value) for (key, value) in self.get_metric().items()])
+
+    @abstractmethod
+    def __call__(self, ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_metric(self, reset: bool = False) -> Dict:
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset(self) -> None:
+        raise NotImplementedError
+
+    def __gt__(self, other: "Metric"):
+        is_large = self.compare_key.startswith('+')
+        key = self.compare_key[1:]
+        assert key in self.get_metric()
+
+        if is_large:
+            return self.get_metric()[key] > other.get_metric()[key]
+        else:
+            return self.get_metric()[key] < other.get_metric()[key]
+
+    def __ge__(self, other: "Metric"):
+        is_large = self.compare_key.startswith('+')
+        key = self.compare_key[1:]
+        assert key in self.get_metric()
+
+        if is_large:
+            return self.get_metric()[key] >= other.get_metric()[key]
+        else:
+            return self.get_metric()[key] <= other.get_metric()[key]
+
+
+class ClassificationMetric(Metric):
+    def __init__(self, compare_key='-loss'):
+        super().__init__(compare_key)
+        self._all_losses = torch.FloatTensor()
+        self._all_predictions = torch.LongTensor()
+        self._all_gold_labels = torch.LongTensor()
+
+
+    @overrides
+    def __call__(self,
+                 losses: torch.Tensor,
+                 logits: torch.FloatTensor,
+                 gold_labels: torch.LongTensor
+                 ) -> None:
+        self._all_losses = torch.cat([self._all_losses, losses.to(self._all_losses.device)], dim=0)
+        predictions = logits.argmax(-1).to(self._all_predictions.device)
+        self._all_predictions = torch.cat([self._all_predictions, predictions], dim=0)
+        self._all_gold_labels = torch.cat([self._all_gold_labels, gold_labels.to(self._all_gold_labels.device)],dim=0)
+
+    @overrides
+    def get_metric(self, reset: bool = False) -> Dict:
+        loss = torch.mean(self._all_losses).item()
+        total_num = self._all_gold_labels.shape[0]
+        accuracy = torch.sum(self._all_gold_labels == self._all_predictions).item() / total_num
+        f1 = f1_score(y_true=self._all_gold_labels.numpy(), y_pred=self._all_predictions.numpy(), average='macro')
+        result = {'loss': loss,
+                  'accuracy': accuracy,
+                  'f1': f1}
+        if reset:
+            self.reset()
+        return result
+
+    @overrides
+    def reset(self) -> None:
+        self._all_losses = torch.FloatTensor()
+        self._all_predictions = torch.LongTensor()
+        self._all_gold_labels = torch.LongTensor()
+
+
+class RandomSmoothAccuracyMetrics(Metric):
+    def __init__(self, compare_key='+accuracy'):
+        super().__init__(compare_key)
+        self._all_numbers = 0
+        self._abstain_numbers = 0
+        self._correct_numbers = 0
+
+    @overrides
+    def __call__(self,
+                 pred: int,
+                 target: int,
+                 ) -> None:
+        self._all_numbers += 1
+        if pred == ABSTAIN_FLAG:
+            self._abstain_numbers += 1
+            return 
+
+        if pred == target:
+            self._correct_numbers += 1
+
+    @overrides
+    def get_metric(self, reset: bool = False) -> Dict:
+        result = {'accuracy': self._correct_numbers / self._all_numbers,
+                  'abstain': self._abstain_numbers / self._all_numbers}
+        if reset:
+            self.reset()
+        return result
+
+    @overrides
+    def reset(self) -> None:
+        self._all_numbers = 0
+        self._abstain_numbers = 0
+        self._correct_numbers = 0
+
+
+class RandomAblationCertifyMetric(Metric):
+    def __init__(self, compare_key='+accuracy'):
+        super().__init__(compare_key)
+        self._certify_radius = []
+        self._sentence_length = []
+
+    @overrides
+    def __call__(self,
+                 radius: int,
+                 length: int,
+                 ) -> None:
+        '''
+        radius: is nan or integer
+        when radius == nan, predict error 
+        when radius == 0,  predict correct but not certified
+        when radius > 0, predict correct, sentence with perturbed numbers smaller than radius is certified 
+        '''
+        self._certify_radius.append(radius)
+        self._sentence_length.append(length)
+
+    @overrides
+    def get_metric(self, reset: bool = False) -> Dict:
+        # result = {'accuracy': self._correct_numbers / self._all_numbers,
+        #          'abstain': self._abstain_numbers / self._all_numbers}
+        assert len(self._certify_radius) == len(self._sentence_length)
+        radius_rate = [radius / length for radius, length in zip(self._certify_radius, self._sentence_length)]
+        result = {'accuracy': sum(~np.isnan(self._certify_radius))/ len(self._certify_radius),
+                  'median': np.median([-1 if np.isnan(radius) else radius for radius in self._certify_radius]), 
+                  'median(right)': np.nanmedian(self._certify_radius),
+                  'mean': np.nanmean(self._certify_radius),
+                  'median rate': np.median([-1 if np.isnan(rate) else rate for rate in radius_rate]), 
+                  'median rate(right)': np.nanmedian(radius_rate),
+                  'mean rate': np.nanmean(radius_rate)
+        }
+        #np.nanmean 忽略nan的mean
+
+        if reset:
+            self.reset()
+        return result
+    def get_certified_accuracy(self,max_radius:int=10):
+        radius = np.array([-1 if np.isnan(radius) else radius for radius in self._certify_radius])
+        certified_accuracy = np.zeros((max_radius+1))
+        for i in range(max_radius+1):
+            certified_accuracy[i] = np.mean(radius>=i)
+
+        return certified_accuracy
+    
+    def get_certified_accuracy_rate(self,rates=np.array([0,1e-2,2e-2,3e-2,4e-2,5e-2,6e-2,7e-2,8e-2,9e-2,1e-1])):
+
+        radius = np.array([-1 if np.isnan(radius) else radius/length for radius,length in zip(self._certify_radius,self._sentence_length)])
+        certified_accuracy_rate = np.zeros((len(rates)))
+        for i,rate in enumerate(rates):
+            certified_accuracy_rate[i] = np.mean(radius>=rate)
+
+        return certified_accuracy_rate
+
+    @overrides
+    def reset(self) -> None:
+        self._certify_radius = []
+        self._sentence_length = []
+
+    def to_str(self, lst: List) -> List:
+        return [str(e) for e in lst]
+
+    def format_list(self, lst: List, num_for_row: int = 50) -> str:
+        return "\n".join([" ".join(self.to_str(lst[i:i+num_for_row])) for i in range(0, len(lst), num_for_row)])
+
+    def certify_radius(self) -> str:
+        return "Certify Radius List : \n{}".format(self.format_list(self._certify_radius))
+
+    def sentence_length(self) -> str:
+        return "Length List: \n{}".format(self.format_list(self._sentence_length))
+
