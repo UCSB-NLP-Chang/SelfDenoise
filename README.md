@@ -1,10 +1,10 @@
-# Certified Robustness for Large Language Models with Self-Denoising
-This is the official implementation of the paper [*Certified Robustness for Large Language Models with Self-Denoising*](https://arxiv.org/abs/2307.07171).
+# Advancing the Robustness of Large Language Models through Self-Denoised Smoothing
+This is the official implementation of the NAACL paper [*Advancing the Robustness of Large Language Models through Self-Denoised Smoothing*](https://arxiv.org/abs/2404.12274).
 
 ## Overview
 <img src="./fig/self_denoise.png" width="50%">
 
-Although large language models (LLMs) have achieved great success in vast real-world applications, their vulnerabilities towards noisy inputs have significantly limited their uses, especially in high-stake environments. In these contexts, it is crucial to ensure that every prediction made by large language models is stable, i.e., LLM predictions should be consistent given minor differences in the input. This largely falls into the study of certified robust LLMs, i.e., all predictions of LLM are certified to be correct in a local region around the input. Randomized smoothing has demonstrated great potential in certifying the robustness and prediction stability of LLMs. However, randomized smoothing requires adding noise to the input before model prediction, and its certification performance depends largely on the model's performance on corrupted data. As a result, its direct application to LLMs remains challenging and often results in a small certification radius. To address this issue, we take advantage of the multitasking nature of LLMs and propose to denoise the corrupted inputs with LLMs in a self-denoising manner. Different from previous works like denoised smoothing, which requires training a separate model to robustify LLM, our method enjoys far better efficiency and flexibility. Our experiment results show that our method outperforms the existing certification methods under both certified robustness and empirical robustness. 
+Although large language models (LLMs) have achieved significant success, their vulnerability to adversarial perturbations, including recent jailbreak attacks, has raised considerable concerns. However, the increasing size of these models and their limited access make improving their robustness a challenging task. Among various defense strategies, randomized smoothing has shown great potential for LLMs, as it does not require full access to the model's parameters or fine-tuning via adversarial training. However, randomized smoothing involves adding noise to the input before model prediction, and the final model's robustness largely depends on the model's performance on these noise-corrupted data. Its effectiveness is often limited by the model's sub-optimal performance on noisy data. To address this issue, we propose to leverage the multitasking nature of LLMs to first denoise the noisy inputs and then to make predictions based on these denoised versions. We call this procedure self-denoised smoothing. Unlike previous denoised smoothing techniques in computer vision, which require training a separate model to enhance the robustness of LLMs, our method offers significantly better efficiency and flexibility. Our experimental results indicate that our method surpasses existing methods in both empirical and certified robustness in defending against adversarial attacks for both downstream tasks and human alignments (i.e., jailbreak attacks). 
 
 ## Getting Started 
 Configure the new environment:
@@ -74,10 +74,18 @@ Our code is build based on [RanMASK](https://github.com/zjiehang/RanMASK):
 ## Citation
 If you find this repository useful, please consider to cite our work:
 ```bibtex
+@article{ji2024advancing,
+  title   = {Advancing the Robustness of Large Language Models through Self-Denoised Smoothing},
+  author  = {Jiabao Ji and Bairu Hou and Zhen Zhang and Guanhua Zhang and Wenqi Fan and Qing Li and Yang Zhang and Gaowen Liu and Sijia Liu and Shiyu Chang},
+  year    = {2024},
+  journal = {arXiv preprint arXiv: 2404.12274}
+}
+
+// Below is the first version
 @article{zhang2023certified,
   title={Certified Robustness for Large Language Models with Self-Denoising},
   author={Zhang, Zhen and Zhang, Guanhua and Hou, Bairu and Fan, Wenqi and Li, Qing and Liu, Sijia and Zhang, Yang and Chang, Shiyu},
   journal={arXiv preprint arXiv:2307.07171},
   year={2023}
-}
+} 
 ```
